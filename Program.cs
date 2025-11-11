@@ -11,165 +11,219 @@ namespace GraphApp
         [STAThread]
         static void Main()
         {
-            Application.EnableVisualStyles();
-            Application.SetCompatibleTextRenderingDefault(false);
+            ApplicationConfiguration.Initialize();
             Application.Run(new GraphForm());
         }
     }
 
     public class GraphForm : Form
     {
-        private const double tStart = 0.2;
-        private const double tEnd = 0.8;
-        private const double tStep = 0.1;
-        private readonly Padding plotMargin = new Padding(50, 30, 30, 50); // відступи від країв
+        // ----------------------------
+        // Константи та поля
+        // ----------------------------
+        private const double TStart = 0.2;
+        private const double TEnd = 0.8;
+        private const double TStep = 0.1;
+        private readonly Padding _plotMargin = new(50, 30, 30, 50);
 
+        private readonly List<KeyValuePair<double, double>> _points;
+        private readonly Pen _linePen = new(Color.Blue, 2);
+        private readonly Pen _axisPen = new(Color.Black, 1);
+        private readonly Pen _gridPen = new(Color.LightGray, 1);
+        private readonly Brush _bgBrush = new SolidBrush(Color.FromArgb(250, 250, 250));
+        private readonly Brush _textBrush = new SolidBrush(Color.Black);
+        private readonly Brush _pointBrush = new SolidBrush(Color.DarkBlue);
+        private readonly Font _fontSmall = new("Segoe UI", 8);
+        private readonly Font _fontNormal = new("Segoe UI", 9);
+
+        private string _graphMode = "Line"; // "Line" або "Points"
+
+        // ----------------------------
+        // Конструктор
+        // ----------------------------
         public GraphForm()
         {
-            this.Text = "Графік y = (tan(2t) - 3t) / (t + 3)";
-            this.BackColor = Color.White;
-            this.MinimumSize = new Size(400, 300);
-            this.DoubleBuffered = true;
-            this.Resize += (s, e) => Invalidate();
-            this.Paint += DrawGraph;
+            Text = "Графік y = (tan(2t) - 3t) / (t + 3)";
+            BackColor = Color.White;
+            MinimumSize = new Size(400, 300);
+            DoubleBuffered = true;
+
+            SetStyle(ControlStyles.AllPaintingInWmPaint | ControlStyles.UserPaint | ControlStyles.OptimizedDoubleBuffer, true);
+
+            // створюємо попередньо дані
+            _points = ComputePoints();
+
+            // елементи керування
+            var combo = new ComboBox
+            {
+                Location = new Point(10, 5),
+                Width = 100,
+                DropDownStyle = ComboBoxStyle.DropDownList
+            };
+            combo.Items.AddRange(new[] { "Line", "Points" });
+            combo.SelectedIndex = 0;
+            combo.SelectedIndexChanged += (s, e) =>
+            {
+                _graphMode = combo.SelectedItem!.ToString()!;
+                Invalidate();
+            };
+            Controls.Add(combo);
+
+            Resize += (s, e) => Invalidate();
+            Paint += OnPaintGraph;
         }
 
-        private void DrawGraph(object sender, PaintEventArgs e)
+        // ----------------------------
+        // Основне малювання
+        // ----------------------------
+        private void OnPaintGraph(object? sender, PaintEventArgs e)
         {
             Graphics g = e.Graphics;
             g.SmoothingMode = SmoothingMode.AntiAlias;
 
-            // обчислюємо точки
-            List<KeyValuePair<double, double>> points = ComputeFunctionPoints();
+            Rectangle plotRect = new(
+                _plotMargin.Left,
+                _plotMargin.Top + 25,
+                ClientSize.Width - _plotMargin.Left - _plotMargin.Right,
+                ClientSize.Height - _plotMargin.Top - _plotMargin.Bottom
+            );
 
-            // знаходимо мінімум і максимум по Y
+            if (plotRect.Width <= 0 || plotRect.Height <= 0)
+                return;
+
+            // фон
+            g.FillRectangle(_bgBrush, plotRect);
+
+            // межі по Y
             double minY = double.PositiveInfinity, maxY = double.NegativeInfinity;
-            foreach (var p in points)
+            foreach (var p in _points)
             {
                 if (p.Value < minY) minY = p.Value;
                 if (p.Value > maxY) maxY = p.Value;
             }
+            if (Math.Abs(maxY - minY) < 1e-6) { minY -= 1; maxY += 1; }
 
-            if (Math.Abs(maxY - minY) < 1e-6)
-            {
-                minY -= 1;
-                maxY += 1;
-            }
+            // осі + сітка
+            DrawAxesAndGrid(g, plotRect, minY, maxY);
 
-            Rectangle plotRect = new Rectangle(
-                plotMargin.Left,
-                plotMargin.Top,
-                this.ClientSize.Width - plotMargin.Left - plotMargin.Right,
-                this.ClientSize.Height - plotMargin.Top - plotMargin.Bottom
-            );
-
-            // фон
-            using (var bg = new SolidBrush(Color.FromArgb(250, 250, 250)))
-                g.FillRectangle(bg, plotRect);
-
-            // осі
-            DrawAxes(g, plotRect, minY, maxY);
-
-            // функція для перетворення координат
+            // функція для мапінгу координат
             PointF ToPixel(double t, double y)
             {
-                float x = (float)Map(t, tStart, tEnd, plotRect.Left, plotRect.Right);
+                float x = (float)Map(t, TStart, TEnd, plotRect.Left, plotRect.Right);
                 float ypx = (float)Map(y, minY, maxY, plotRect.Bottom, plotRect.Top);
                 return new PointF(x, ypx);
             }
 
-            // малюємо лінію
-            using (var pen = new Pen(Color.Blue, 2))
+            // малювання графіка
+            if (_graphMode == "Line")
             {
-                for (int i = 0; i < points.Count - 1; i++)
+                for (int i = 0; i < _points.Count - 1; i++)
                 {
-                    PointF p1 = ToPixel(points[i].Key, points[i].Value);
-                    PointF p2 = ToPixel(points[i + 1].Key, points[i + 1].Value);
-                    g.DrawLine(pen, p1, p2);
+                    g.DrawLine(_linePen,
+                        ToPixel(_points[i].Key, _points[i].Value),
+                        ToPixel(_points[i + 1].Key, _points[i + 1].Value));
                 }
             }
 
-            // маркери точок
-            using (var brush = new SolidBrush(Color.DarkBlue))
-            using (var font = new Font("Segoe UI", 8))
+            // малювання точок
+            foreach (var p in _points)
             {
-                foreach (var p in points)
-                {
-                    PointF pt = ToPixel(p.Key, p.Value);
-                    g.FillEllipse(brush, pt.X - 3, pt.Y - 3, 6, 6);
-                    string label = $"t={p.Key:0.0}";
-                    SizeF sz = g.MeasureString(label, font);
-                    g.DrawString(label, font, brush, pt.X - sz.Width / 2, plotRect.Bottom + 2);
-                }
+                PointF pt = ToPixel(p.Key, p.Value);
+                g.FillEllipse(_pointBrush, pt.X - 3, pt.Y - 3, 6, 6);
+            }
+
+            // підписи до точок по осі t
+            foreach (var p in _points)
+            {
+                PointF pt = ToPixel(p.Key, p.Value);
+                string label = $"t={p.Key:0.0}";
+                SizeF sz = g.MeasureString(label, _fontSmall);
+                g.DrawString(label, _textBrush, pt.X - sz.Width / 2, plotRect.Bottom + 2);
             }
 
             // назва функції
-            using (var font = new Font("Segoe UI", 9))
-            using (var brush = new SolidBrush(Color.Black))
-            {
-                g.DrawString("y = (tan(2t) - 3t) / (t + 3)", font, brush, plotRect.Left, 4);
-            }
+            g.DrawString("y = (tan(2t) - 3t) / (t + 3)", _fontNormal, _textBrush, plotRect.Left, 4);
         }
 
-        private void DrawAxes(Graphics g, Rectangle rect, double minY, double maxY)
+        // ----------------------------
+        // Малювання осей і сітки
+        // ----------------------------
+        private void DrawAxesAndGrid(Graphics g, Rectangle rect, double minY, double maxY)
         {
-            using (var axisPen = new Pen(Color.Black, 1))
+            g.DrawLine(_axisPen, rect.Left, rect.Bottom, rect.Right, rect.Bottom);
+            g.DrawLine(_axisPen, rect.Left, rect.Top, rect.Left, rect.Bottom);
+
+            int stepsT = (int)Math.Round((TEnd - TStart) / TStep);
+            for (int i = 0; i <= stepsT; i++)
             {
-                g.DrawLine(axisPen, rect.Left, rect.Bottom, rect.Right, rect.Bottom);
-                g.DrawLine(axisPen, rect.Left, rect.Top, rect.Left, rect.Bottom);
+                double t = TStart + i * TStep;
+                float x = (float)Map(t, TStart, TEnd, rect.Left, rect.Right);
+                g.DrawLine(_gridPen, x, rect.Top, x, rect.Bottom);
+                string label = t.ToString("0.0");
+                SizeF sz = g.MeasureString(label, _fontSmall);
+                g.DrawString(label, _textBrush, x - sz.Width / 2, rect.Bottom + 2);
             }
 
-            using (var gridPen = new Pen(Color.LightGray, 1))
-            using (var textBrush = new SolidBrush(Color.Black))
-            using (var font = new Font("Segoe UI", 8))
+            int yTicks = 6;
+            for (int i = 0; i <= yTicks; i++)
             {
-                int stepsT = (int)Math.Round((tEnd - tStart) / tStep);
-                for (int i = 0; i <= stepsT; i++)
-                {
-                    double t = tStart + i * tStep;
-                    float x = (float)Map(t, tStart, tEnd, rect.Left, rect.Right);
-                    g.DrawLine(gridPen, x, rect.Top, x, rect.Bottom);
-                    string label = t.ToString("0.0");
-                    SizeF sz = g.MeasureString(label, font);
-                    g.DrawString(label, font, textBrush, x - sz.Width / 2, rect.Bottom + 2);
-                }
-
-                int yTicks = 6;
-                for (int i = 0; i <= yTicks; i++)
-                {
-                    double y = Map(i, 0, yTicks, minY, maxY);
-                    float ypx = (float)Map(y, minY, maxY, rect.Bottom, rect.Top);
-                    g.DrawLine(gridPen, rect.Left, ypx, rect.Right, ypx);
-                    string yLabel = y.ToString("0.###");
-                    SizeF sz = g.MeasureString(yLabel, font);
-                    g.DrawString(yLabel, font, textBrush, rect.Left - sz.Width - 6, ypx - sz.Height / 2);
-                }
+                double y = Map(i, 0, yTicks, minY, maxY);
+                float ypx = (float)Map(y, minY, maxY, rect.Bottom, rect.Top);
+                g.DrawLine(_gridPen, rect.Left, ypx, rect.Right, ypx);
+                string yLabel = y.ToString("0.###");
+                SizeF sz = g.MeasureString(yLabel, _fontSmall);
+                g.DrawString(yLabel, _textBrush, rect.Left - sz.Width - 6, ypx - sz.Height / 2);
             }
         }
 
-        private List<KeyValuePair<double, double>> ComputeFunctionPoints()
+        // ----------------------------
+        // Обчислення функції
+        // ----------------------------
+        private static List<KeyValuePair<double, double>> ComputePoints()
         {
             var list = new List<KeyValuePair<double, double>>();
-            for (double t = tStart; t <= tEnd + 1e-9; t = Math.Round(t + tStep, 10))
+            for (double t = TStart; t <= TEnd + 1e-9; t = Math.Round(t + TStep, 10))
             {
                 double y = Evaluate(t);
+                if (!double.IsFinite(y)) continue; // ігноруємо проблемні точки
                 list.Add(new KeyValuePair<double, double>(Math.Round(t, 1), y));
             }
             return list;
         }
 
-        private double Evaluate(double t)
+        private static double Evaluate(double t)
         {
-            double numerator = Math.Tan(2 * t) - 3 * t;
             double denominator = t + 3;
-            return numerator / denominator;
+            if (Math.Abs(denominator) < 1e-8) return double.NaN;
+            return (Math.Tan(2 * t) - 3 * t) / denominator;
         }
 
+        // ----------------------------
+        // Мапінг координат
+        // ----------------------------
         private static double Map(double a, double aMin, double aMax, double bMin, double bMax)
         {
-            if (Math.Abs(aMax - aMin) < 1e-12)
-                return (bMin + bMax) / 2;
+            if (Math.Abs(aMax - aMin) < 1e-12) return (bMin + bMax) / 2;
             return bMin + (a - aMin) * (bMax - bMin) / (aMax - aMin);
+        }
+
+        // ----------------------------
+        // Звільнення ресурсів
+        // ----------------------------
+        protected override void Dispose(bool disposing)
+        {
+            if (disposing)
+            {
+                _linePen.Dispose();
+                _axisPen.Dispose();
+                _gridPen.Dispose();
+                _bgBrush.Dispose();
+                _textBrush.Dispose();
+                _pointBrush.Dispose();
+                _fontSmall.Dispose();
+                _fontNormal.Dispose();
+            }
+            base.Dispose(disposing);
         }
     }
 }
